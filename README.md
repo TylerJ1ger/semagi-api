@@ -38,7 +38,7 @@ cp settings.example.json settings.json
   "base_url": "http://localhost:8000",
   "task": {
     "function": "scrap-and-group",
-    "file": "keywords.json",
+    "file": "keywords.csv",
     "task_name": "my_task"
   },
   "defaults": {
