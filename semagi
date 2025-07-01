@@ -1,0 +1,483 @@
+#!/bin/bash
+
+# SEMagi API 跨平台统一客户端
+# 支持 Unix/Linux/macOS/Windows (Git Bash/WSL)
+# 自动检测系统环境并选择合适的客户端脚本
+
+set -e
+
+# 脚本信息
+SCRIPT_VERSION="1.0.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_DIR="$SCRIPT_DIR/scripts"
+
+# 检测操作系统
+detect_os() {
+    case "$OSTYPE" in
+        linux*)   echo "linux" ;;
+        darwin*)  echo "macos" ;;
+        cygwin*)  echo "windows" ;;
+        msys*)    echo "windows" ;;
+        win32*)   echo "windows" ;;
+        *)        echo "unknown" ;;
+    esac
+}
+
+OS_TYPE=$(detect_os)
+
+# 颜色输出支持（Windows环境可能不支持）
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && [[ "$OS_TYPE" != "windows" ]]; then
+    RED=$(tput setaf 1)
+    GREEN=$(tput setaf 2)
+    YELLOW=$(tput setaf 3)
+    BLUE=$(tput setaf 4)
+    BOLD=$(tput bold)
+    RESET=$(tput sgr0)
+else
+    RED="" GREEN="" YELLOW="" BLUE="" BOLD="" RESET=""
+fi
+
+# 输出函数
+log_info() { echo "${BLUE}ℹ${RESET} $1"; }
+log_success() { echo "${GREEN}✓${RESET} $1"; }
+log_warning() { echo "${YELLOW}⚠${RESET} $1"; }
+log_error() { echo "${RED}✗${RESET} $1"; }
+
+# 检查配置文件中的API密钥
+check_config_api_key() {
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local settings_file="$script_dir/settings.json"
+    
+    if [[ -f "$settings_file" ]]; then
+        # 使用python或其他方式读取JSON文件中的api_key
+        if command -v python3 >/dev/null 2>&1; then
+            local api_key
+            api_key=$(python3 -c "
+import json
+import sys
+try:
+    with open('$settings_file', 'r') as f:
+        settings = json.load(f)
+        print(settings.get('api_key', ''))
+except:
+    sys.exit(1)
+" 2>/dev/null)
+            if [[ -n "$api_key" && "$api_key" != "" ]]; then
+                echo "$api_key"
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
+# 显示横幅
+show_banner() {
+    echo "${BOLD}${BLUE}"
+    echo "╔══════════════════════════════════════════╗"
+    echo "║       SEMagi API 跨平台统一客户端        ║"
+    echo "║            版本 $SCRIPT_VERSION                    ║"
+    echo "╚══════════════════════════════════════════╝"
+    echo "${RESET}"
+}
+
+# 显示帮助信息
+show_help() {
+    show_banner
+    cat << EOF
+${BOLD}用法:${RESET}
+  $0 [选项] <操作>
+
+${BOLD}系统要求:${RESET}
+  • Python 3.x
+  • requests 库 (pip install requests)
+  • 支持 Unix/Linux/macOS/Windows (Git Bash/WSL)
+
+${BOLD}操作:${RESET}
+  create-task       创建新任务
+  check-status      查询任务状态
+  get-results       获取任务结果
+  wait-completion   等待任务完成
+
+${BOLD}基本选项:${RESET}
+  -u, --base-url URL     API基础URL (默认: 从配置文件读取)
+
+${BOLD}创建任务选项 (可选，优先使用配置文件):${RESET}
+  -f, --function TYPE    功能类型 (group-only|scrap-and-group)
+  -i, --file PATH        输入文件路径
+  -n, --task-name NAME   任务名称
+  -w, --wait             创建后等待完成
+
+${BOLD}可选参数:${RESET}
+  --grouper TYPE         分组算法 (hierarchical_clustering|jaccard)
+  --min-similarity NUM   最小相似度 (0.0-1.0)
+  --range NUM            搜索范围 (1-1000)
+  --country CODE         国家代码 (默认: us)
+  --language CODE        语言代码 (默认: en)
+  --numbers NUM          搜索数量 (默认: 10)
+
+${BOLD}查询选项:${RESET}
+  -t, --task-id ID       任务ID
+
+${BOLD}客户端选项:${RESET}
+  --show-client          显示客户端信息
+
+${BOLD}其他选项:${RESET}
+  -h, --help             显示此帮助
+  -v, --verbose          详细输出
+  --version              显示版本
+  --check-env            检查环境依赖
+
+${BOLD}使用示例:${RESET}
+  # 使用配置文件参数创建任务（推荐）
+  $0 create-task
+
+  # 覆盖配置文件参数
+  $0 -f scrap-and-group -i keywords.csv -n "custom_task" create-task
+
+  # 查询任务状态
+  $0 -t "task_id" check-status
+
+  # 获取任务结果
+  $0 -t "task_id" get-results
+
+${BOLD}支持的系统:${RESET}
+  • Unix/Linux (Bash环境)
+  • macOS (Bash环境)
+  • Windows (Git Bash, WSL)
+  • 任何支持Bash的环境
+
+${BOLD}文件格式要求:${RESET}
+  group-only:      JSON格式 (.json)
+  scrap-and-group: CSV/TXT格式 (.csv, .txt)
+
+EOF
+}
+
+# 检查环境依赖
+check_environment() {
+    local python_available=false
+    local issues=()
+
+    log_info "检查环境依赖..."
+    log_info "操作系统: $OS_TYPE"
+
+    # 检查Python
+    if command -v python3 >/dev/null 2>&1; then
+        local python_version=$(python3 --version 2>&1)
+        log_success "Python 可用: $python_version"
+        
+        # 检查requests库
+        if python3 -c "import requests" >/dev/null 2>&1; then
+            log_success "Python requests 库可用"
+            python_available=true
+        else
+            log_warning "Python requests 库不可用"
+            issues+=("Python requests库未安装，运行: pip install requests")
+        fi
+    elif command -v python >/dev/null 2>&1; then
+        local python_version=$(python --version 2>&1)
+        if [[ "$python_version" == *"Python 3"* ]]; then
+            log_success "Python 可用: $python_version"
+            
+            if python -c "import requests" >/dev/null 2>&1; then
+                log_success "Python requests 库可用"
+                python_available=true
+            else
+                log_warning "Python requests 库不可用"
+                issues+=("Python requests库未安装，运行: pip install requests")
+            fi
+        else
+            log_warning "检测到Python 2，需要Python 3"
+            issues+=("需要Python 3，当前版本: $python_version")
+        fi
+    else
+        log_warning "Python 不可用"
+        issues+=("Python未安装或不在PATH中")
+    fi
+
+    # 显示总结
+    echo ""
+    log_info "环境检查总结:"
+    
+    if $python_available; then
+        log_success "Python客户端: 可用 ✓"
+    else
+        log_warning "Python客户端: 不可用 ✗"
+    fi
+
+    if [[ ${#issues[@]} -gt 0 ]]; then
+        echo ""
+        log_warning "发现以下问题:"
+        for issue in "${issues[@]}"; do
+            echo "  • $issue"
+        done
+    fi
+
+    if ! $python_available; then
+        echo ""
+        log_error "Python客户端不可用！请安装Python3和requests库"
+        return 1
+    fi
+
+    echo ""
+    log_success "将使用Python客户端"
+
+    return 0
+}
+
+# 选择客户端
+select_client() {
+    local show_client="$1"
+
+    # 检查Python和requests
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import requests" >/dev/null 2>&1; then
+        echo "python"
+        [[ "$show_client" == "true" ]] && log_info "使用客户端: Python3"
+        return 0
+    elif command -v python >/dev/null 2>&1 && python -c "import requests" >/dev/null 2>&1; then
+        echo "python"
+        [[ "$show_client" == "true" ]] && log_info "使用客户端: Python"
+        return 0
+    else
+        log_error "Python客户端不可用！请安装Python3和requests库"
+        return 1
+    fi
+}
+
+# 调用Python客户端
+call_python_client() {
+    local python_cmd="python3"
+    
+    # 确定Python命令
+    if ! command -v python3 >/dev/null 2>&1; then
+        python_cmd="python"
+    fi
+    
+    local python_script="$SCRIPTS_DIR/api_client.py"
+    
+    if [[ ! -f "$python_script" ]]; then
+        log_error "Python客户端脚本不存在: $python_script"
+        return 1
+    fi
+    
+    # 执行Python客户端
+    "$python_cmd" "$python_script" "$@"
+}
+
+
+# 转换参数格式（为Python客户端）
+convert_args_for_python() {
+    local args=()
+    local i=0
+    local arg_count=$#
+    local argv=("$@")
+    local skip_next=false
+    
+    while [[ $i -lt $arg_count ]]; do
+        if [[ "$skip_next" == "true" ]]; then
+            skip_next=false
+            ((i++))
+            continue
+        fi
+        
+        case "${argv[$i]}" in
+            create-task)
+                # Python客户端不需要显式的操作参数，但需要保留其他参数
+                ;;
+            check-status)
+                args+=("--check-status" "${TASK_ID}")
+                ;;
+            get-results)
+                args+=("--get-results" "${TASK_ID}")
+                ;;
+            wait-completion)
+                args+=("--check-status" "${TASK_ID}")
+                # 注：Python客户端会自动等待完成
+                ;;
+            -w|--wait)
+                # Python客户端默认等待完成，除非指定 --no-wait
+                ;;
+            -t|--task-id)
+                # 跳过task-id参数，因为已经在上面处理了
+                skip_next=true
+                ;;
+            *)
+                args+=("${argv[$i]}")
+                ;;
+        esac
+        ((i++))
+    done
+    
+    printf '%s\n' "${args[@]}"
+}
+
+# 主函数
+main() {
+    # 默认值
+    local verbose="false"
+    local show_client="false"
+    local check_env_only="false"
+    
+    # 全局变量用于参数传递
+    TASK_ID=""
+    
+    # 如果没有参数，显示帮助
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 0
+    fi
+    
+    # 解析参数（第一轮：查找特殊选项）
+    local temp_args=("$@")
+    for arg in "${temp_args[@]}"; do
+        case "$arg" in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --version)
+                show_banner
+                echo "跨平台统一客户端版本: $SCRIPT_VERSION"
+                echo "脚本位置: $SCRIPT_DIR"
+                echo "检测到的操作系统: $OS_TYPE"
+                exit 0
+                ;;
+            --check-env)
+                check_env_only="true"
+                ;;
+            --show-client)
+                show_client="true"
+                ;;
+            -v|--verbose)
+                verbose="true"
+                ;;
+        esac
+    done
+    
+    # 如果只是检查环境
+    if [[ "$check_env_only" == "true" ]]; then
+        show_banner
+        check_environment
+        exit $?
+    fi
+    
+    # 显示横幅（除非是简单查询）
+    if [[ "$verbose" == "true" || "$show_client" == "true" ]]; then
+        show_banner
+    fi
+    
+    # 选择客户端
+    local selected_client
+    selected_client=$(select_client "$show_client")
+    if [[ $? -ne 0 ]]; then
+        echo ""
+        log_info "运行 '$0 --check-env' 来检查环境依赖"
+        exit 1
+    fi
+    
+    # 解析task-id参数（用于参数转换）
+    local i=0
+    while [[ $i -lt $# ]]; do
+        if [[ "${!i}" == "-t" || "${!i}" == "--task-id" ]]; then
+            ((i++))
+            if [[ $i -lt $# ]]; then
+                TASK_ID="${!i}"
+            fi
+            break
+        fi
+        ((i++))
+    done
+    
+    # 调用Python客户端
+    if [[ "$verbose" == "true" ]]; then
+        log_info "正在调用Python客户端..."
+    fi
+    
+    # 检查配置文件中的API密钥
+    local config_api_key=""
+    config_api_key=$(check_config_api_key)
+    if [[ $? -ne 0 || -z "$config_api_key" ]]; then
+        log_error "需要在settings.json中配置API密钥"
+        log_info "请复制 settings.example.json 为 settings.json 并填入你的API密钥"
+        return 1
+    fi
+    
+    if [[ "$verbose" == "true" ]]; then
+        log_info "使用配置文件中的API密钥"
+    fi
+    
+    # 转换参数格式为Python客户端格式
+    local python_args=()
+    local i=0
+    local argv=("$@")
+    local skip_next=false
+    
+    while [[ $i -lt $# ]]; do
+        if [[ "$skip_next" == "true" ]]; then
+            skip_next=false
+            ((i++))
+            continue
+        fi
+        
+        case "${argv[$i]}" in
+            -u)
+                python_args+=("--base-url" "${argv[$((i+1))]}")
+                skip_next=true
+                ;;
+            -f)
+                python_args+=("--function" "${argv[$((i+1))]}")
+                skip_next=true
+                ;;
+            -i)
+                python_args+=("--file" "${argv[$((i+1))]}")
+                skip_next=true
+                ;;
+            -n)
+                python_args+=("--task-name" "${argv[$((i+1))]}")
+                skip_next=true
+                ;;
+            -t)
+                # task-id在其他地方处理
+                skip_next=true
+                ;;
+            create-task|check-status|get-results|wait-completion)
+                # 操作命令已在主函数中处理
+                ;;
+            -w|--wait)
+                # Python客户端默认等待，所以不传递此参数
+                ;;
+            --show-client|--check-env)
+                # 跳过主脚本的内部参数
+                ;;
+            -v|--verbose)
+                # 跳过详细输出参数
+                ;;
+            --*)
+                # 长格式参数直接传递
+                if [[ $((i+1)) -lt $# && "${argv[$((i+1))]}" != -* ]]; then
+                    python_args+=("${argv[$i]}" "${argv[$((i+1))]}")
+                    skip_next=true
+                else
+                    python_args+=("${argv[$i]}")
+                fi
+                ;;
+            *)
+                python_args+=("${argv[$i]}")
+                ;;
+        esac
+        ((i++))
+    done
+    
+    call_python_client "${python_args[@]}"
+}
+
+# 检查脚本目录
+if [[ ! -d "$SCRIPTS_DIR" ]]; then
+    log_error "脚本目录不存在: $SCRIPTS_DIR"
+    log_info "请确保在正确的目录中运行此脚本"
+    exit 1
+fi
+
+# 执行主函数
+main "$@"

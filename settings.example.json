@@ -1,0 +1,36 @@
+{
+  "api_key": "sk_your_api_key_here",
+  "base_url": "https://devapi.semagi.com",
+  "task": {
+    "function": "scrap-and-group",
+    "file": "keywords.csv",
+    "task_name": "2507011201_api_task"
+  },
+  "defaults": {
+    "grouper": "hierarchical_clustering",
+    "min_similarity": 0.5,
+    "range": 10,
+    "country": "us",
+    "language": "en",
+    "numbers": 10,
+    "force_group": true,
+    "force_group_min_similarity": 0.2
+  },
+  "timeout": {
+    "request_timeout": 30,
+    "max_wait_time": 1800
+  },
+  "display": {
+    "show_debug": false,
+    "show_progress": true
+  },
+  "polling": {
+    "respect_estimate_time": true,
+    "custom_interval_seconds": 5,
+    "min_interval_seconds": 2,
+    "max_interval_seconds": 30,
+    "limited_retry_strategy": true,
+    "max_retries": 3,
+    "retry_on_error": true
+  }
+}
